@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <title>Uploader & Visualiser Images</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      max-width: 900px;
+      margin: auto;
+      padding: 1.5rem;
+      background: #f9f9f9;
+      color: #333;
+    }
+    h1 {
+      text-align: center;
+      margin-bottom: 1.5rem;
+    }
+  </style>
+  <link rel="stylesheet" href="styles.css" />
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.css" rel="stylesheet"/>
+</head>
+
+<body>
+  <h1>Uploader des images</h1>
+  <form id="uploadForm">
+    <input type="file" id="fileInput" name="images" multiple webkitdirectory directory />
+    <button type="submit">Uploader</button>
+  </form>
+
+  <div id="gallery"></div>
+
+  <!-- Modal de crop -->
+  <div id="cropModal" class="modal">
+    <div class="modal-box">
+      <h2>Rogner l'image</h2>
+      <div class="crop-container">
+        <img id="imageToCrop" />
+      </div>
+      <button id="applyCropBtn" class="btn primary">Valider</button>
+      <button id="closeCropBtn" class="btn secondary">Annuler</button>
+    </div>
+  </div>
+
+  <!-- Modal de prévisualisation -->
+  <div id="viewImageModal" class="modal dark">
+    <div class="modal-content">
+      <img id="viewedImage" />
+      <button id="cropSingleBtn" class="btn primary">Rogner cette image</button>
+    </div>
+  </div>
+
+  <button id="generateLinksBtn" class="btn generate">Générer les liens</button>
+  <button id="resetCropBtn" class="btn reset">Réinitialiser les crops</button>
+</body>
+
+<script>
+  const form = document.getElementById('uploadForm');
+  const fileInput = document.getElementById('fileInput');
+  const gallery = document.getElementById('gallery');
+  const viewImageModal = document.getElementById('viewImageModal');
+  const viewedImage = document.getElementById('viewedImage');
+  const cropThisImageBtn = document.getElementById('cropSingleBtn');
+
+  let currentImageSrc = "";
+  let currentFilename = "";
+
+  let cropMode = 'global'; // "global" ou "single"
+  let cropTargetFilename = ''; // utilisé si cropMode = 'single'
+
+  gallery.addEventListener('click', e => {
+    if (e.target.tagName === 'IMG') {
+      currentImageSrc = e.target.src;
+      viewedImage.src = currentImageSrc;
+      viewImageModal.style.display = 'flex';
+
+      try {
+        const urlObj = new URL(currentImageSrc);
+        currentFilename = decodeURIComponent(urlObj.pathname.split('/').pop());
+      } catch {
+        currentFilename = "";
+      }
+
+      cropThisImageBtn.style.display = 'inline-block';
+    }
+  });
+
+  viewImageModal.addEventListener('click', (e) => {
+    if (e.target === viewImageModal) {
+      viewImageModal.style.display = 'none';
+      viewedImage.src = '';
+      cropThisImageBtn.style.display = 'none';
+    }
+  });
+
+  cropThisImageBtn.addEventListener('click', () => {
+    if (!currentFilename) {
+      alert('Impossible de récupérer le nom du fichier');
+      return;
+    }
+    cropMode = 'single';
+    cropTargetFilename = currentFilename;
+    openCropperModal(`/uploads/${encodeURIComponent(currentFilename)}`);
+    viewImageModal.style.display = 'none';
+  });
+
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    if (!fileInput.files.length) {
+      alert('Sélectionne au moins un fichier');
+      return;
+    }
+
+    const formData = new FormData();
+    for (const file of fileInput.files) {
+      formData.append('images', file, file.name);
+    }
+
+    const res = await fetch('/upload', {
+      method: 'POST',
+      body: formData
+    });
+
+    if (!res.ok) {
+      alert('Erreur lors de l\'upload');
+      return;
+    }
+
+    const data = await res.json();
+    gallery.innerHTML = '';
+    data.files.forEach(url => {
+      const img = document.createElement('img');
+      img.src = url;
+      img.alt = 'Image uploadée';
+      gallery.appendChild(img);
+    });
+  });
+
+  async function reloadGallery() {
+    try {
+      const res = await fetch('/list-images');
+      if (!res.ok) throw new Error('Erreur réseau');
+
+      const images = await res.json();
+
+      gallery.innerHTML = '';
+      images.forEach(({ url, filename }) => {
+        const img = document.createElement('img');
+        img.src = `${url}?_=${Date.now()}`;
+        img.alt = filename;
+        gallery.appendChild(img);
+      });
+    } catch (err) {
+      alert('Erreur lors du chargement des images : ' + err.message);
+    }
+  }
+
+  const cropModal = document.getElementById('cropModal');
+  const imageToCrop = document.getElementById('imageToCrop');
+  const applyCropBtn = document.getElementById('applyCropBtn');
+  const closeCropBtn = document.getElementById('closeCropBtn');
+  let cropper = null;
+
+  function openCropperModal(url) {
+    imageToCrop.src = url;
+    cropModal.style.display = 'flex';
+
+    if (cropper) cropper.destroy();
+    cropper = new Cropper(imageToCrop, {
+      aspectRatio: NaN,
+      viewMode: 1,
+      autoCropArea: 0.8,
+    });
+  }
+
+  applyCropBtn.addEventListener('click', async () => {
+    if (!cropper) return;
+
+    const cropData = cropper.getData(true);
+
+    const payload = {
+      x: cropData.x,
+      y: cropData.y,
+      width: cropData.width,
+      height: cropData.height
+    };
+
+    if (cropMode === 'single') {
+      payload.filename = cropTargetFilename;
+    }
+
+    try {
+      const res = await fetch('/crop', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await res.json();
+      if (data.success) {
+        alert('✅ Rognage appliqué ' + (cropMode === 'single' ? 'à cette image' : 'à toutes les images') + ' !');
+        cropModal.style.display = 'none';
+        cropper.destroy();
+        cropper = null;
+        cropMode = 'global';
+        cropTargetFilename = '';
+
+        await loadCroppedImages();
+      } else {
+        alert('❌ Erreur côté serveur : ' + (data.error || 'Erreur inconnue'));
+      }
+    } catch (err) {
+      alert('❌ Erreur réseau : ' + err.message);
+    }
+  });
+
+  closeCropBtn.addEventListener('click', () => {
+    cropModal.style.display = 'none';
+    if (cropper) {
+      cropper.destroy();
+      cropper = null;
+    }
+  });
+
+  const cropButton = document.createElement('button');
+  cropButton.textContent = 'Rogner les images';
+  cropButton.style.marginLeft = '10px';
+  form.appendChild(cropButton);
+
+  cropButton.addEventListener('click', e => {
+    e.preventDefault();
+    if (gallery.children.length === 0) {
+      alert('Upload d\'abord des images !');
+      return;
+    }
+    const firstImg = gallery.querySelector('img');
+    cropMode = 'global';
+    cropTargetFilename = '';
+    openCropperModal(firstImg.src);
+  });
+
+  async function loadCroppedImages() {
+    try {
+      const res = await fetch('/cropped-images');
+      if (!res.ok) throw new Error('Erreur chargement images cropées');
+      const data = await res.json();
+      gallery.innerHTML = '';
+      data.files.forEach(url => {
+        const img = document.createElement('img');
+        img.src = url + '?_=' + Date.now();
+        img.alt = 'Image rognée';
+        gallery.appendChild(img);
+      });
+    } catch (err) {
+      console.error(err);
+      alert('Erreur lors du chargement des images rognées');
+    }
+  }
+
+  window.addEventListener('load', () => {
+    loadCroppedImages();
+  });
+
+  document.getElementById("generateLinksBtn").addEventListener("click", async () => {
+    const btn = document.getElementById("generateLinksBtn");
+    btn.disabled = true;
+    btn.textContent = "Génération en cours...";
+
+    const res = await fetch("/generate-links", { method: "POST" });
+    if (res.ok) {
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "archive.zip";
+      a.click();
+      window.URL.revokeObjectURL(url);
+      gallery.innerHTML = '';
+    } else {
+      alert("Erreur lors de la génération.");
+    }
+
+    btn.disabled = false;
+    btn.textContent = "Générer les liens";
+  });
+
+
+  document.getElementById("resetCropBtn").addEventListener("click", async () => {
+  if (!confirm("Voulez-vous vraiment réinitialiser tous les crops ?")) return;
+
+  const res = await fetch("/reset-crop", { method: "POST" });
+  if (res.ok) {
+    alert("✅ Tous les crops ont été réinitialisés.");
+    // Recharger la galerie avec les images originales
+    await reloadGallery();
+  } else {
+    alert("❌ Erreur lors de la réinitialisation.");
+  }
+});
+
+</script>
+
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.js"></script>
+</body>
+</html>

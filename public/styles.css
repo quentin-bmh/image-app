@@ -1,0 +1,121 @@
+#uploadForm{
+    /* border: solid 2px black; */
+    justify-content: space-evenly;
+    display: flex;
+}
+
+#gallery {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-top: 20px;
+    border: solid 2px black;
+}
+
+#gallery img {
+  width: 140px;
+  height: 100px;
+  object-fit: cover;
+  border: 2px solid #ccc;
+  border-radius: 6px;
+  transition: transform 0.2s ease;
+  cursor: pointer;
+}
+#gallery img:hover {
+  transform: scale(1.03);
+}
+
+/* Modal général */
+.modal {
+  display: none;
+  position: fixed;
+  top: 0; left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(0,0,0,0.8);
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+}
+.modal.dark {
+  background: rgba(0,0,0,0.92);
+}
+
+/* Boîte centrale de crop */
+.modal-box {
+  background: #fff;
+  padding: 20px;
+  max-width: 90vw;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  border-radius: 8px;
+}
+
+/* Image crop */
+.crop-container {
+  max-width: 800px;
+  max-height: 600px;
+  overflow: hidden;
+  margin-bottom: 10px;
+}
+.crop-container img {
+  max-width: 100%;
+  max-height: 600px;
+  display: block;
+}
+
+/* Image preview modal */
+.modal-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.modal-content img {
+  max-width: 90vw;
+  max-height: 80vh;
+  object-fit: contain;
+  border-radius: 8px;
+  margin-bottom: 10px;
+}
+
+/* Boutons */
+.btn {
+  padding: 10px 18px;
+  border: none;
+  border-radius: 4px;
+  font-size: 14px;
+  cursor: pointer;
+}
+.btn.primary {
+  background-color: #4caf50;
+  color: white;
+}
+.btn.secondary {
+  background-color: #ccc;
+  color: #333;
+}
+.btn.generate {
+  display: block;
+  margin: 20px auto;
+  background-color: #1976d2;
+  color: white;
+}
+
+.btn:hover {
+  opacity: 0.9;
+}
+.btn.reset {
+  display: block;
+  margin: 10px auto;
+  background-color: #e53935;
+  color: white;
+  padding: 10px 20px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.btn.reset:hover {
+  background-color: #d32f2f;
+}

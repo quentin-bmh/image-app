@@ -119,3 +119,92 @@
 .btn.reset:hover {
   background-color: #d32f2f;
 }
+
+.image-wrapper {
+  position: relative;
+  display: inline-block;
+  margin: 8px;
+}
+
+.image-wrapper img {
+  max-width: 180px;
+  border-radius: 4px;
+  display: block;
+}
+
+.delete-btn {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  background: rgba(255, 0, 0, 0.8);
+  border: none;
+  color: white;
+  border-radius: 50%;
+  width: 24px;
+  height: 24px;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+}
+
+
+#toast-container {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.toast {
+  min-width: 240px;
+  max-width: 320px;
+  padding: 12px 18px;
+  border-radius: 6px;
+  color: white;
+  font-family: sans-serif;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  animation: fadeInOut 4s ease forwards;
+  opacity: 0;
+  transform: translateY(-10px);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.toast.success {
+  background-color: #2ecc71;
+}
+
+.toast.error {
+  background-color: #e74c3c;
+}
+
+.toast .icon {
+  font-size: 18px;
+}
+
+@keyframes fadeInOut {
+  0% {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  10% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  90% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+}

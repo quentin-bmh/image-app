@@ -8,6 +8,30 @@ const sharp = require('sharp');
 const archiver = require("archiver");
 const ExcelJS = require("exceljs");
 const { Dropbox } = require("dropbox");
+const fetch = require('node-fetch');
+
+async function refreshAccessToken() {
+  const response = await fetch('https://api.dropboxapi.com/oauth2/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      refresh_token: process.env.DROPBOX_REFRESH_TOKEN,
+      grant_type: 'refresh_token',
+      client_id: process.env.DROPBOX_CLIENT_ID,
+      client_secret: process.env.DROPBOX_CLIENT_SECRET
+    })
+  });
+
+  if (!response.ok) {
+    console.error('[ERREUR] Impossible de rafraîchir le token');
+    const error = await response.text();
+    throw new Error(error);
+  }
+
+  const data = await response.json();
+  console.log('[INFO] Nouveau token Dropbox obtenu');
+  process.env.DROPBOX_ACCESS_TOKEN = data.access_token; // mise à jour en mémoire
+}
 
 const app = express();
 app.use(express.json());
@@ -116,41 +140,81 @@ app.post('/reset-crop', async (req, res) => {
   }
 });
 
+async function safeDropboxCall(fn) {
+  let dbx = new Dropbox({ accessToken: process.env.DROPBOX_ACCESS_TOKEN, fetch });
+  try {
+    return await fn(dbx);
+  } catch (err) {
+    if (err.status === 401) {
+      console.warn('[WARNING] Token expiré, tentative de rafraîchissement...');
+      await refreshAccessToken();
+      dbx = new Dropbox({ accessToken: process.env.DROPBOX_ACCESS_TOKEN, fetch });
+      return await fn(dbx);
+    } else {
+      throw err;
+    }
+  }
+}
+app.get('/list-images', (req, res) => {
+  const getFilesWithUrls = (dir, urlPath) =>
+    fs.readdirSync(dir).map(filename => ({
+      filename,
+      url: `${urlPath}/${filename}`
+    }));
+
+  const uploads = getFilesWithUrls(uploadsDir, '/uploads');
+  const cropped = getFilesWithUrls(croppedDir, '/cropped');
+
+  // Fusionne, sans doublons (cropped en priorité)
+  const merged = [...cropped, ...uploads.filter(u => !cropped.some(c => c.filename === u.filename))];
+
+  res.json(merged);
+});
 
 // Génération des liens Dropbox + ZIP
 app.post("/generate-links", async (req, res) => {
   try {
-    const dbx = new Dropbox({ accessToken: process.env.DROPBOX_ACCESS_TOKEN });
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet("Liens");
 
-    console.log("[INFO] Lecture des fichiers dans 'cropped/'...");
-    const files = fs.readdirSync(croppedDir).filter(f =>
-      /\.(png|jpe?g)$/i.test(f)
-    );
-    console.log(`[INFO] ${files.length} fichier(s) trouvé(s) dans 'cropped/'`);
+    // Chercher dans cropped d'abord
+    let files = [];
+    let sourceDir = croppedDir;
 
-    if (files.length === 0) {
-      console.warn("[WARN] Aucun fichier image trouvé dans 'cropped/'");
-      return res.status(400).send("Aucune image rognée à traiter.");
+    console.log("[INFO] Lecture des fichiers dans 'cropped/'...");
+    if (fs.existsSync(croppedDir)) {
+      files = fs.readdirSync(croppedDir).filter(f => /\.(png|jpe?g)$/i.test(f));
     }
 
+    if (files.length === 0) {
+      console.warn("[WARN] Aucun fichier dans 'cropped/', on regarde dans 'uploads/'");
+      sourceDir = uploadsDir;
+      if (fs.existsSync(uploadsDir)) {
+        files = fs.readdirSync(uploadsDir).filter(f => /\.(png|jpe?g)$/i.test(f));
+      }
+      if (files.length === 0) {
+        return res.status(400).send("Aucune image trouvée à traiter dans cropped ou uploads.");
+      }
+    }
+
+    console.log(`[INFO] ${files.length} fichier(s) à traiter depuis '${path.basename(sourceDir)}/'`);
+
     for (const file of files) {
-      const localPath = path.join(croppedDir, file);
+      const localPath = path.join(sourceDir, file);
       const dropboxPath = `/images/${file}`;
+
       console.log(`[UPLOAD] Upload de ${file} vers Dropbox...`);
-
       const content = fs.readFileSync(localPath);
-      await dbx.filesUpload({ path: dropboxPath, contents: content, mode: 'overwrite' });
+      await safeDropboxCall(dbx => dbx.filesUpload({ path: dropboxPath, contents: content, mode: 'overwrite' }));
 
-      let linkRes = await dbx.sharingListSharedLinks({ path: dropboxPath });
+      let linkRes = await safeDropboxCall(dbx => dbx.sharingListSharedLinks({ path: dropboxPath }));
       let url;
 
       if (linkRes.result.links.length > 0) {
         url = linkRes.result.links[0].url;
         console.log(`[INFO] Lien existant trouvé pour ${file}`);
       } else {
-        const newLink = await dbx.sharingCreateSharedLinkWithSettings({ path: dropboxPath });
+        const newLink = await safeDropboxCall(dbx => dbx.sharingCreateSharedLinkWithSettings({ path: dropboxPath }));
         url = newLink.result.url;
         console.log(`[INFO] Nouveau lien créé pour ${file}`);
       }
@@ -177,12 +241,18 @@ app.post("/generate-links", async (req, res) => {
         console.log("[INFO] Suppression du ZIP et du Excel après téléchargement...");
         fs.unlinkSync(archivePath);
         fs.unlinkSync(excelPath);
-        fs.readdirSync(croppedDir).forEach(file => fs.unlinkSync(path.join(croppedDir, file)));
-        console.log("[INFO] Suppression des images dans 'uploads/'...");
-        const uploadedFiles = fs.readdirSync(uploadsDir);
-        for (const f of uploadedFiles) {
-          const filePath = path.join(uploadsDir, f);
-          fs.unlinkSync(filePath);
+
+        // Supprimer images cropées si cropées utilisées
+        if (sourceDir === croppedDir) {
+          fs.readdirSync(croppedDir).forEach(file => fs.unlinkSync(path.join(croppedDir, file)));
+        }
+
+        // Supprimer images uploads toujours
+        if (fs.existsSync(uploadsDir)) {
+          const uploadedFiles = fs.readdirSync(uploadsDir);
+          for (const f of uploadedFiles) {
+            fs.unlinkSync(path.join(uploadsDir, f));
+          }
         }
         console.log("[INFO] Suppression terminée.");
       });
@@ -197,7 +267,7 @@ app.post("/generate-links", async (req, res) => {
 
     console.log("[INFO] Ajout des images à l'archive...");
     for (const file of files) {
-      const filePath = path.join(croppedDir, file);
+      const filePath = path.join(sourceDir, file);
       console.log(`  - Ajout de: ${filePath}`);
       archive.file(filePath, { name: `images/${file}` });
     }
@@ -205,45 +275,58 @@ app.post("/generate-links", async (req, res) => {
     console.log("[INFO] Ajout de liens.xlsx à l'archive...");
     archive.file(excelPath, { name: "liens.xlsx" });
 
-    await archive.finalize();
-    console.log("[INFO] archive.finalize() lancé");
-
+    archive.finalize();
   } catch (err) {
-    console.error("Erreur lors de la génération :", err);
-    res.status(500).send("Erreur lors de la génération des liens.");
+    console.error("[ERREUR] /generate-links:", err);
+    res.status(500).send("Erreur lors de la génération des liens et de l'archive.");
   }
 });
 
-app.get('/list-images', (req, res) => {
+app.post("/delete-image", (req, res) => {
   try {
-    const files = fs.readdirSync(uploadsDir).filter(f =>
-      /\.(png|jpe?g)$/i.test(f)
-    );
+    const { filename } = req.body;
 
-    const customDir = path.join(croppedDir, 'custom');
+    if (!filename || typeof filename !== "string") {
+      return res.status(400).json({ error: "Nom de fichier invalide." });
+    }
 
-    const list = files.map(file => {
-      const customPath = path.join(customDir, file);
-      const croppedPath = path.join(croppedDir, file);
+    // Sécurité : interdire chemins relatifs etc.
+    if (filename.includes("..") || filename.includes("/")) {
+      return res.status(400).json({ error: "Nom de fichier non autorisé." });
+    }
 
-      let url;
-      if (fs.existsSync(customPath)) {
-        url = `/cropped/custom/${encodeURIComponent(file)}`;
-      } else if (fs.existsSync(croppedPath)) {
-        url = `/cropped/${encodeURIComponent(file)}`;
-      } else {
-        url = `/uploads/${encodeURIComponent(file)}`;
-      }
+    const croppedPath = path.join(croppedDir, filename);
+    const uploadsPath = path.join(uploadsDir, filename);
 
-      return { filename: file, url };
-    });
+    let deleted = false;
 
-    res.json(list);
+    // Supprime dans cropped s’il existe
+    if (fs.existsSync(croppedPath)) {
+      fs.unlinkSync(croppedPath);
+      deleted = true;
+      console.log(`[DELETE] ${croppedPath} supprimé`);
+    }
+
+    // Supprime dans uploads s’il existe
+    if (fs.existsSync(uploadsPath)) {
+      fs.unlinkSync(uploadsPath);
+      deleted = true;
+      console.log(`[DELETE] ${uploadsPath} supprimé`);
+    }
+
+    if (!deleted) {
+      return res.status(404).json({ error: "Fichier non trouvé dans cropped ou uploads." });
+    }
+
+    res.json({ message: "Image supprimée avec succès." });
+
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Erreur lors de la liste des images' });
+    console.error("[ERREUR] /delete-image:", err);
+    res.status(500).json({ error: "Erreur serveur lors de la suppression." });
   }
 });
 
 
-app.listen(3000, () => console.log('Server running on http://localhost:3000'));
+app.listen(port, () => {
+  console.log(`Serveur démarré sur http://localhost:${port}`);
+});

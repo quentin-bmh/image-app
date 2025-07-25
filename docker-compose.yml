@@ -1,0 +1,12 @@
+services:
+  image-app:
+    build: .
+    container_name: image-app
+    ports:
+      - "3010:3000"
+    env_file:
+      - .env
+    volumes:
+      - .:/app
+      - /app/node_modules
+    restart: unless-stopped
